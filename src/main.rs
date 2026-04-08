@@ -1,30 +1,8 @@
 use std::sync::Arc;
 
-use config::ConfiguracaoAplicacao;
-use repositories::{arquivo_repository::RepositorioArquivo, projeto_repository::RepositorioProjeto};
-use services::{arquivo_service::ServicoArquivo, projeto_service::ServicoProjeto};
+use file_storage_service::{config::ConfiguracaoAplicacao, construir_estado_aplicacao, rotas};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::{EnvFilter, fmt};
-
-mod config;
-mod contexto;
-mod controllers;
-mod dtos;
-mod erros;
-mod middlewares;
-mod models;
-mod repositories;
-mod rotas;
-mod services;
-
-/// Estado partilhado pelo Axum (pool, configuracao, servicos).
-#[derive(Clone)]
-pub struct EstadoAplicacao {
-    pub configuracao: Arc<ConfiguracaoAplicacao>,
-    pub pool: sqlx::PgPool,
-    pub servico_arquivo: Arc<ServicoArquivo>,
-    pub servico_projeto: Arc<ServicoProjeto>,
-}
 
 #[tokio::main]
 async fn main() {
@@ -45,31 +23,7 @@ async fn main() {
         .await
         .expect("Falha ao executar migracoes SQL");
 
-    let repositorio_projeto = Arc::new(RepositorioProjeto::novo(pool.clone()));
-    let repositorio_arquivo = Arc::new(RepositorioArquivo::novo(
-        pool.clone(),
-        configuracao.diretorio_armazenamento.clone(),
-    ));
-
-    let servico_projeto = Arc::new(ServicoProjeto::novo(
-        repositorio_projeto,
-        configuracao.diretorio_armazenamento.clone(),
-    ));
-
-    let servico_arquivo = Arc::new(ServicoArquivo::novo(
-        repositorio_arquivo,
-        configuracao.porta,
-        configuracao.base_url.clone(),
-        configuracao.tamanho_maximo_arquivo_bytes,
-    ));
-
-    let estado = Arc::new(EstadoAplicacao {
-        configuracao: configuracao.clone(),
-        pool,
-        servico_arquivo,
-        servico_projeto,
-    });
-
+    let estado = construir_estado_aplicacao(configuracao.clone(), pool);
     let aplicativo = rotas::criar_rotas(estado);
     let endereco = format!("0.0.0.0:{}", configuracao.porta);
 

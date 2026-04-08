@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio::fs;
 use uuid::Uuid;
 
@@ -22,6 +22,27 @@ impl RepositorioArquivo {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    async fn iniciar_transacao_projeto(
+        &self,
+        projeto_id: Uuid,
+    ) -> Result<Transaction<'_, Postgres>, ErroAplicacao> {
+        let mut transacao = self.pool.begin().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!("Falha ao iniciar transacao do projeto: {erro}"))
+        })?;
+
+        sqlx::query("SELECT set_config('app.current_project_id', $1, true)")
+            .bind(projeto_id.to_string())
+            .execute(transacao.as_mut())
+            .await
+            .map_err(|erro| {
+                ErroAplicacao::Interno(format!(
+                    "Falha ao configurar contexto do projeto na transacao: {erro}"
+                ))
+            })?;
+
+        Ok(transacao)
     }
 
     /// Caminho absoluto `{base}/{projeto_id}/{id_arquivo}` (sem extensao no disco).
@@ -65,6 +86,7 @@ impl RepositorioArquivo {
                 ErroAplicacao::Interno(format!("Falha ao salvar arquivo no disco: {erro}"))
             })?;
 
+        let mut transacao = self.iniciar_transacao_projeto(projeto_id).await?;
         let resultado = sqlx::query(
             r#"
             INSERT INTO arquivos (id, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho)
@@ -77,7 +99,7 @@ impl RepositorioArquivo {
         .bind(&caminho_str)
         .bind(&tipo_mime)
         .bind(tamanho)
-        .execute(&self.pool)
+        .execute(transacao.as_mut())
         .await;
 
         if let Err(erro) = resultado {
@@ -86,6 +108,13 @@ impl RepositorioArquivo {
                 "Falha ao registrar arquivo na base de dados: {erro}"
             )));
         }
+
+        transacao.commit().await.map_err(|erro| {
+            let _ = std::fs::remove_file(&caminho_arquivo);
+            ErroAplicacao::Interno(format!(
+                "Falha ao confirmar gravacao do arquivo na base de dados: {erro}"
+            ))
+        })?;
 
         Ok(ArquivoModelo {
             id,
@@ -107,6 +136,7 @@ impl RepositorioArquivo {
             Err(_) => return Ok(None),
         };
 
+        let mut transacao = self.iniciar_transacao_projeto(projeto_id).await?;
         let linha = sqlx::query(
             r#"
             SELECT id::text, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho
@@ -116,10 +146,16 @@ impl RepositorioArquivo {
         )
         .bind(id_uuid)
         .bind(projeto_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(transacao.as_mut())
         .await
         .map_err(|erro| {
             ErroAplicacao::Interno(format!("Falha ao consultar arquivo na base: {erro}"))
+        })?;
+
+        transacao.commit().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao confirmar consulta de arquivo na base: {erro}"
+            ))
         })?;
 
         Ok(linha.map(|linha| ArquivoModelo {
@@ -136,6 +172,7 @@ impl RepositorioArquivo {
         &self,
         projeto_id: Uuid,
     ) -> Result<Vec<ArquivoModelo>, ErroAplicacao> {
+        let mut transacao = self.iniciar_transacao_projeto(projeto_id).await?;
         let linhas = sqlx::query(
             r#"
             SELECT id::text, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho
@@ -145,10 +182,16 @@ impl RepositorioArquivo {
             "#,
         )
         .bind(projeto_id)
-        .fetch_all(&self.pool)
+        .fetch_all(transacao.as_mut())
         .await
         .map_err(|erro| {
             ErroAplicacao::Interno(format!("Falha ao listar arquivos na base: {erro}"))
+        })?;
+
+        transacao.commit().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao confirmar listagem de arquivos na base: {erro}"
+            ))
         })?;
 
         Ok(linhas
@@ -189,6 +232,7 @@ impl RepositorioArquivo {
             ErroAplicacao::NaoEncontrado("Identificador de arquivo invalido".to_string())
         })?;
 
+        let mut transacao = self.iniciar_transacao_projeto(projeto_id).await?;
         let caminho: Option<String> = sqlx::query_scalar(
             r#"
             SELECT caminho FROM arquivos WHERE id = $1 AND projeto_id = $2
@@ -196,7 +240,7 @@ impl RepositorioArquivo {
         )
         .bind(id_uuid)
         .bind(projeto_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(transacao.as_mut())
         .await
         .map_err(|erro| {
             ErroAplicacao::Interno(format!("Falha ao localizar arquivo na base: {erro}"))
@@ -209,11 +253,17 @@ impl RepositorioArquivo {
         sqlx::query(r#"DELETE FROM arquivos WHERE id = $1 AND projeto_id = $2"#)
             .bind(id_uuid)
             .bind(projeto_id)
-            .execute(&self.pool)
+            .execute(transacao.as_mut())
             .await
             .map_err(|erro| {
                 ErroAplicacao::Interno(format!("Falha ao remover registro do arquivo: {erro}"))
             })?;
+
+        transacao.commit().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao confirmar remocao do arquivo na base: {erro}"
+            ))
+        })?;
 
         if let Err(erro) = fs::remove_file(&caminho).await {
             tracing::warn!(
@@ -240,6 +290,7 @@ impl RepositorioArquivo {
             ErroAplicacao::Interno(format!("Id invalido para persistencia: {erro}"))
         })?;
 
+        let mut transacao = self.iniciar_transacao_projeto(projeto_id).await?;
         sqlx::query(
             r#"
             INSERT INTO arquivos (id, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho)
@@ -252,11 +303,17 @@ impl RepositorioArquivo {
         .bind(&caminho)
         .bind(&tipo_mime)
         .bind(tamanho)
-        .execute(&self.pool)
+        .execute(transacao.as_mut())
         .await
         .map_err(|erro| {
             ErroAplicacao::Interno(format!(
                 "Falha ao registrar arquivo na base de dados: {erro}"
+            ))
+        })?;
+
+        transacao.commit().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao confirmar registro de arquivo na base de dados: {erro}"
             ))
         })?;
 
