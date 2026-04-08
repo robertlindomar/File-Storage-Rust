@@ -1,0 +1,34 @@
+# Exemplo de unidade systemd para correr no host (fora do Docker).
+# Copie para /etc/systemd/system/file-storage.service, ajuste caminhos e segredos,
+# depois: sudo systemctl daemon-reload && sudo systemctl enable --now file-storage.service
+#
+# Firewall (exemplo ufw): restringir a porta HTTP a localhost e à rede Docker se for serviço interno:
+#   sudo ufw allow from 172.16.0.0/12 to any port 3000
+#   (ajuste a rede conforme `docker network inspect` / política da VPS)
+
+[Unit]
+Description=Microservico de armazenamento de ficheiros (file_storage_service)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=filestorage
+Group=filestorage
+WorkingDirectory=/opt/file_storage_service
+ExecStart=/opt/file_storage_service/file_storage_service
+Restart=on-failure
+RestartSec=5
+
+# Variáveis obrigatorias / recomendadas:
+Environment=PORTA=3000
+Environment=DIRETORIO_ARMAZENAMENTO=/var/lib/file-storage/data
+Environment=API_KEY=troque-por-um-segredo-longo
+Environment=DATABASE_URL=postgresql://postgres:SEGURO@127.0.0.1:5432/file_storage
+Environment=BASE_URL=http://127.0.0.1:3000
+
+# Opcional: ficheiro com permissoes 600 em vez de password em claro na unit
+# EnvironmentFile=-/etc/file-storage.env
+
+[Install]
+WantedBy=multi-user.target

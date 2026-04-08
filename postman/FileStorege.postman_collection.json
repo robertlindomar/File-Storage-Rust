@@ -1,0 +1,307 @@
+{
+  "info": {
+    "_postman_id": "344465a1-69db-4e39-a954-059fe8aaed4b",
+    "name": "File Storage Service",
+    "description": "Coleção para o microserviço file_storage_service (multi-tenant). Configure: `baseUrl`, `tokenAdmin` (= API_KEY_ADMIN), `token` (= api_key do projeto após criar projeto; o script do POST preenche automaticamente). Opcional: `projetoId`, `arquivoId`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "44405983",
+    "_collection_link": "https://go.postman.co/collection/44405983-344465a1-69db-4e39-a954-059fe8aaed4b?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Saude",
+      "item": [
+        {
+          "name": "GET health (liveness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "response": []
+        },
+        {
+          "name": "GET ready (readiness + Postgres)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ready"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin (projetos)",
+      "item": [
+        {
+          "name": "POST criar projeto",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    try {",
+                  "        var j = pm.response.json();",
+                  "        if (j && j.id) { pm.collectionVariables.set('projetoId', j.id); }",
+                  "        if (j && j.api_key) { pm.collectionVariables.set('token', j.api_key); }",
+                  "    } catch (e) {}",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Projeto de teste\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/admin/projetos"
+          },
+          "response": []
+        },
+        {
+          "name": "GET listar projetos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/projetos"
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE apagar projeto",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/projetos/{{projetoId}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Arquivos",
+      "item": [
+        {
+          "name": "POST enviar arquivo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    try {",
+                  "        var j = pm.response.json();",
+                  "        if (j && j.id) { pm.collectionVariables.set('arquivoId', j.id); }",
+                  "    } catch (e) {}",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "arquivo",
+                  "description": "Selecione um ficheiro qualquer (campo obrigatório: arquivo).",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/arquivos"
+          },
+          "response": []
+        },
+        {
+          "name": "GET listar arquivos",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/arquivos"
+          },
+          "response": []
+        },
+        {
+          "name": "GET baixar arquivo por id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/arquivos/{{arquivoId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE deletar arquivo",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/arquivos/{{arquivoId}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Imagens",
+      "item": [
+        {
+          "name": "POST enviar imagem",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    try {",
+                  "        var j = pm.response.json();",
+                  "        if (j && j.id) { pm.collectionVariables.set('arquivoId', j.id); }",
+                  "    } catch (e) {}",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "arquivo",
+                  "description": "Imagem (Content-Type image/* ou extensão .png, .jpg, etc.).",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/imagens"
+          },
+          "response": []
+        },
+        {
+          "name": "GET baixar imagem por id",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/imagens/{{arquivoId}}"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [""]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "requests": {},
+        "exec": [""]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "tokenAdmin",
+      "value": "admin-chave-local-trocar"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "projetoId",
+      "value": ""
+    },
+    {
+      "key": "arquivoId",
+      "value": ""
+    }
+  ]
+}
