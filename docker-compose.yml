@@ -11,9 +11,13 @@ services:
   app:
     build: .
     network_mode: host
-    env_file: .env
+    #env_file: .env
     environment:
       # Sobrepõe o ./armazenamento do .env — dentro do contentor os ficheiros vão para este caminho.
+      PORTA: ${PORTA}
+      DATABASE_URL: ${DATABASE_URL}
+      API_KEY_ADMIN: ${API_KEY_ADMIN}
+      BASE_URL: ${BASE_URL}
       DIRETORIO_ARMAZENAMENTO: /app/armazenamento
     volumes:
       - filestore:/app/armazenamento
