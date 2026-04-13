@@ -1,4 +1,8 @@
 # syntax=docker/dockerfile:1
+#
+# Variáveis em runtime: defina no Coolify (ou compose / -e). Obrigatórias na prática:
+#   DATABASE_URL, API_KEY_ADMIN
+# Opcionais (o binário tem defaults se omitir): PORTA, DIRETORIO_ARMAZENAMENTO, BASE_URL
 
 FROM rust:1.94-bookworm AS builder
 WORKDIR /app
@@ -20,9 +24,6 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/target/release/file_storage_service /app/file_storage_service
 
 USER app
-
-ENV PORTA=3000
-ENV DIRETORIO_ARMAZENAMENTO=/app/armazenamento
 
 EXPOSE 3000
 
