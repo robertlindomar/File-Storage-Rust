@@ -38,6 +38,7 @@ pub fn criar_rotas(estado: Arc<EstadoAplicacao>) -> Router {
         .layer(from_fn(camada_admin));
 
     Router::new()
+        .route("/", get(saude_controller::raiz))
         .route("/health", get(saude_controller::saude))
         .route("/ready", get(saude_controller::pronto))
         .nest("/api/v1", Router::new().merge(rotas_tenant).merge(rotas_admin))

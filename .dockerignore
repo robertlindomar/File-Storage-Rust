@@ -1,0 +1,11 @@
+target
+.git
+.env
+armazenamento
+.cursor
+deploy
+docs
+postman
+tests
+*.md
+LICENSE

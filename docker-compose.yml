@@ -1,0 +1,25 @@
+# Postgres no host (mesmo PC): usa o teu .env (DATABASE_URL com localhost ou 127.0.0.1).
+# `network_mode: host` faz o contentor partilhar a rede do Linux — assim `localhost`
+# no DATABASE_URL é o teu PostgreSQL local.
+#
+#   docker compose up --build
+#
+# Em Docker Desktop (Mac/Windows), `network_mode: host` não funciona como no Linux;
+# aí usa `docker run` com --add-host e Postgres a escutar em todas as interfaces, ou o Postgres em contentor.
+
+services:
+  app:
+    build: .
+    network_mode: host
+    env_file: .env
+    environment:
+      # Sobrepõe o ./armazenamento do .env — dentro do contentor os ficheiros vão para este caminho.
+      DIRETORIO_ARMAZENAMENTO: /app/armazenamento
+    volumes:
+      - filestore:/app/armazenamento
+      # Em alternativa, pasta no host (comente a linha `filestore` acima):
+      - /root/FileStorageProjetos:/app/armazenamento
+    restart: unless-stopped
+
+volumes:
+  filestore:
