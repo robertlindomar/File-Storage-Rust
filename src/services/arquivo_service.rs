@@ -6,8 +6,10 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::{
-    dtos::arquivo_dto::RespostaUploadDto, erros::ErroAplicacao,
-    models::arquivo_modelo::ArquivoModelo, repositories::arquivo_repository::RepositorioArquivo,
+    dtos::arquivo_dto::{AtividadeUploadDto, MetricasArmazenamentoDto, RespostaUploadDto},
+    erros::ErroAplicacao,
+    models::arquivo_modelo::ArquivoModelo,
+    repositories::arquivo_repository::RepositorioArquivo,
 };
 
 /// Regras de negocio do dominio de arquivos (por projeto).
@@ -138,6 +140,48 @@ impl ServicoArquivo {
         projeto_id: Uuid,
     ) -> Result<Vec<ArquivoModelo>, ErroAplicacao> {
         self.repositorio.listar_por_projeto(projeto_id).await
+    }
+
+    /// Uploads recentes em todos os projetos (rota admin com JWT).
+    pub async fn listar_uploads_recentes_globais(
+        &self,
+        limite: i64,
+    ) -> Result<Vec<AtividadeUploadDto>, ErroAplicacao> {
+        let linhas = self
+            .repositorio
+            .listar_uploads_recentes_globais(limite)
+            .await?;
+        Ok(linhas
+            .into_iter()
+            .map(|linha| AtividadeUploadDto {
+                nome_arquivo: linha.nome_arquivo,
+                projeto_id: linha.projeto_id,
+                projeto_nome: linha.projeto_nome,
+                tamanho: linha.tamanho,
+                criado_em: linha.criado_em,
+            })
+            .collect())
+    }
+
+    /// Bytes totais registados e, se houver cota, percentagem usada (max 100).
+    pub async fn metricas_armazenamento_globais(
+        &self,
+        bytes_cota: Option<u64>,
+    ) -> Result<MetricasArmazenamentoDto, ErroAplicacao> {
+        let bytes_usados = self.repositorio.somar_bytes_totais_admin().await?;
+        let percentagem = bytes_cota.and_then(|cota| {
+            if cota == 0 {
+                return None;
+            }
+            let usados = bytes_usados.max(0) as f64;
+            let pct = (usados / cota as f64) * 100.0;
+            Some((pct.min(100.0) * 10.0).round() / 10.0)
+        });
+        Ok(MetricasArmazenamentoDto {
+            bytes_usados,
+            bytes_cota,
+            percentagem,
+        })
     }
 }
 

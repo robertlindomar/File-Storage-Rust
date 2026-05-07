@@ -64,9 +64,10 @@ impl ServicoProjeto {
         let linhas = self.repositorio.listar_todos().await?;
         Ok(linhas
             .into_iter()
-            .map(|(id, nome, criado_em)| ProjetoListaDto {
+            .map(|(id, nome, api_key, criado_em)| ProjetoListaDto {
                 id,
                 nome,
+                api_key,
                 criado_em,
             })
             .collect())

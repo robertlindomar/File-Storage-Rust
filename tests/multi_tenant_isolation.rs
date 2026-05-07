@@ -16,6 +16,8 @@ struct ArquivoDtoTeste {
     nome_arquivo: String,
     tipo_mime: String,
     tamanho: i64,
+    criado_em: chrono::DateTime<chrono::Utc>,
+    projeto_id: uuid::Uuid,
 }
 
 #[tokio::test]
@@ -57,6 +59,8 @@ async fn tenant_lista_apenas_os_proprios_arquivos() {
     assert_eq!(arquivos[0].nome_arquivo, "a.txt");
     assert_eq!(arquivos[0].tipo_mime, "text/plain");
     assert_eq!(arquivos[0].tamanho, b"conteudo-a".len() as i64);
+    assert_eq!(arquivos[0].projeto_id, projeto_a);
+    assert!(arquivos[0].criado_em <= chrono::Utc::now());
 }
 
 #[tokio::test]

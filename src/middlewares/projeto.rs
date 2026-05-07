@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, middleware::Next, response::Response};
 
 use crate::{EstadoAplicacao, erros::ErroAplicacao};
 

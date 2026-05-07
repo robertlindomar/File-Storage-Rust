@@ -17,6 +17,7 @@ pub struct ProjetoCriadoDto {
 pub struct ProjetoListaDto {
     pub id: Uuid,
     pub nome: String,
+    pub api_key: String,
     pub criado_em: chrono::DateTime<chrono::Utc>,
 }
 

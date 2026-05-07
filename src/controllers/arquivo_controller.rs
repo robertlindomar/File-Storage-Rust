@@ -1,4 +1,4 @@
-use std::path::Path as CaminhoFicheiro;
+use std::path::Path as CaminhoArquivo;
 use std::sync::Arc;
 
 use axum::{
@@ -14,15 +14,17 @@ use uuid::Uuid;
 use crate::{
     EstadoAplicacao,
     contexto::ProjetoAutenticado,
-    dtos::arquivo_dto::ArquivoDto,
+    dtos::arquivo_dto::{
+        ArquivoDto, FalhaUploadLoteDto, RespostaLoteUploadDto, RespostaUploadDto,
+    },
     erros::ErroAplicacao,
     services::arquivo_service::inferir_tipo_mime,
 };
 
-/// Grava o campo multipart em disco por chunks (nao carrega o ficheiro inteiro em RAM).
-async fn gravar_campo_em_ficheiro(
+/// Grava o campo multipart em disco por chunks (nao carrega o arquivo inteiro em RAM).
+async fn gravar_campo_em_arquivo(
     campo: &mut axum::extract::multipart::Field<'_>,
-    caminho: &CaminhoFicheiro,
+    caminho: &CaminhoArquivo,
     limite: u64,
 ) -> Result<u64, ErroAplicacao> {
     if let Some(pasta) = caminho.parent() {
@@ -31,8 +33,8 @@ async fn gravar_campo_em_ficheiro(
         })?;
     }
 
-    let mut ficheiro = tokio::fs::File::create(caminho).await.map_err(|erro| {
-        ErroAplicacao::Interno(format!("Falha ao criar ficheiro no disco: {erro}"))
+    let mut arquivo = tokio::fs::File::create(caminho).await.map_err(|erro| {
+        ErroAplicacao::Interno(format!("Falha ao criar arquivo no disco: {erro}"))
     })?;
 
     let mut total = 0u64;
@@ -52,7 +54,7 @@ async fn gravar_campo_em_ficheiro(
             )));
         }
 
-        ficheiro.write_all(&chunk).await.map_err(|erro| {
+        arquivo.write_all(&chunk).await.map_err(|erro| {
             ErroAplicacao::Interno(format!("Falha ao escrever no disco: {erro}"))
         })?;
         total += adicao;
@@ -61,15 +63,73 @@ async fn gravar_campo_em_ficheiro(
     Ok(total)
 }
 
+fn mensagem_erro_lote(erro: ErroAplicacao) -> String {
+    match erro {
+        ErroAplicacao::RequisicaoInvalida(m) => m,
+        ErroAplicacao::NaoAutorizado => "Acesso negado".to_string(),
+        ErroAplicacao::Proibido => "Operacao nao permitida".to_string(),
+        ErroAplicacao::NaoEncontrado(m) => m,
+        ErroAplicacao::PayloadDemasiadoGrande(m) => m,
+        ErroAplicacao::Interno(m) => m,
+    }
+}
+
+async fn upload_um_campo_arquivo(
+    projeto_id: Uuid,
+    estado: &Arc<EstadoAplicacao>,
+    mut campo: axum::extract::multipart::Field<'_>,
+    segmento_url: &str,
+    limite_por_arquivo: u64,
+) -> Result<RespostaUploadDto, ErroAplicacao> {
+    let nome_arquivo = campo.file_name().map(ToString::to_string).ok_or_else(|| {
+        ErroAplicacao::RequisicaoInvalida("Nome do arquivo e obrigatorio".to_string())
+    })?;
+
+    if nome_arquivo.trim().is_empty() {
+        return Err(ErroAplicacao::RequisicaoInvalida(
+            "Nome do arquivo nao pode ser vazio".to_string(),
+        ));
+    }
+
+    let mime_campo = campo.content_type().map(ToString::to_string);
+    let tipo_mime = inferir_tipo_mime(&nome_arquivo, mime_campo.as_deref());
+    let id = Uuid::new_v4().to_string();
+    let caminho = estado
+        .servico_arquivo
+        .caminho_fisico_arquivo(projeto_id, &id);
+    let caminho_path = CaminhoArquivo::new(&caminho);
+
+    let tamanho = gravar_campo_em_arquivo(&mut campo, caminho_path, limite_por_arquivo).await?;
+
+    if tamanho == 0 {
+        let _ = tokio::fs::remove_file(caminho_path).await;
+        return Err(ErroAplicacao::RequisicaoInvalida(
+            "Arquivo enviado esta vazio".to_string(),
+        ));
+    }
+
+    estado
+        .servico_arquivo
+        .finalizar_upload(
+            projeto_id,
+            id,
+            nome_arquivo,
+            tipo_mime,
+            tamanho,
+            segmento_url,
+        )
+        .await
+}
+
 /// Upload multipart (campo `arquivo`). Tipos MIME inferidos do nome e do Content-Type.
 pub async fn enviar_arquivo(
     Extension(projeto): Extension<ProjetoAutenticado>,
     Extension(estado): Extension<Arc<EstadoAplicacao>>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<crate::dtos::arquivo_dto::RespostaUploadDto>), ErroAplicacao> {
+) -> Result<(StatusCode, Json<RespostaUploadDto>), ErroAplicacao> {
     let limite = estado.servico_arquivo.tamanho_maximo_bytes();
 
-    let (nome_arquivo, mime_campo, mut campo) = loop {
+    let campo_arquivo = loop {
         let campo = match multipart.next_field().await.map_err(|erro| {
             ErroAplicacao::RequisicaoInvalida(format!("Falha ao processar multipart: {erro}"))
         })? {
@@ -83,53 +143,78 @@ pub async fn enviar_arquivo(
         if campo.name() != Some("arquivo") {
             continue;
         }
-        let nome_arquivo = campo.file_name().map(ToString::to_string);
-        let mime_campo = campo.content_type().map(ToString::to_string);
-        break (nome_arquivo, mime_campo, campo);
+        break campo;
     };
 
-    let nome_arquivo = nome_arquivo.ok_or_else(|| {
-        ErroAplicacao::RequisicaoInvalida("Nome do arquivo e obrigatorio".to_string())
-    })?;
-
-    if nome_arquivo.trim().is_empty() {
-        return Err(ErroAplicacao::RequisicaoInvalida(
-            "Nome do arquivo nao pode ser vazio".to_string(),
-        ));
-    }
-
-    let tipo_mime = inferir_tipo_mime(&nome_arquivo, mime_campo.as_deref());
-    let id = Uuid::new_v4().to_string();
-    let caminho = estado
-        .servico_arquivo
-        .caminho_fisico_arquivo(projeto.id, &id);
-    let caminho_path = CaminhoFicheiro::new(&caminho);
-
-    let tamanho = gravar_campo_em_ficheiro(&mut campo, caminho_path, limite).await?;
-
-    if tamanho == 0 {
-        let _ = tokio::fs::remove_file(caminho_path).await;
-        return Err(ErroAplicacao::RequisicaoInvalida(
-            "Arquivo enviado esta vazio".to_string(),
-        ));
-    }
-
-    let resposta = estado
-        .servico_arquivo
-        .finalizar_upload(
-            projeto.id,
-            id,
-            nome_arquivo,
-            tipo_mime,
-            tamanho,
-            "arquivos",
-        )
+    let resposta = upload_um_campo_arquivo(projeto.id, &estado, campo_arquivo, "arquivos", limite)
         .await?;
 
     Ok((StatusCode::CREATED, Json(resposta)))
 }
 
-/// Download com stream (adequado a ficheiros grandes).
+/// Varias partes multipart com nome `arquivo` (mesmo campo repetido). Melhor esforco.
+pub async fn enviar_arquivos_lote(
+    Extension(projeto): Extension<ProjetoAutenticado>,
+    Extension(estado): Extension<Arc<EstadoAplicacao>>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<RespostaLoteUploadDto>), ErroAplicacao> {
+    let limite_por_arquivo = estado.servico_arquivo.tamanho_maximo_bytes();
+    let max_arquivos = estado.configuracao.max_arquivos_por_lote;
+
+    let mut sucesso = Vec::new();
+    let mut falhas = Vec::new();
+    let mut partes_arquivo = 0usize;
+
+    while let Some(campo) = multipart.next_field().await.map_err(|erro| {
+        ErroAplicacao::RequisicaoInvalida(format!("Falha ao processar multipart: {erro}"))
+    })? {
+        if campo.name() != Some("arquivo") {
+            continue;
+        }
+
+        if partes_arquivo >= max_arquivos {
+            return Err(ErroAplicacao::RequisicaoInvalida(format!(
+                "No maximo {max_arquivos} arquivos por lote"
+            )));
+        }
+        partes_arquivo += 1;
+
+        let nome_exibir = campo
+            .file_name()
+            .map(ToString::to_string)
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| "(sem nome)".to_string());
+
+        match upload_um_campo_arquivo(
+            projeto.id,
+            &estado,
+            campo,
+            "arquivos",
+            limite_por_arquivo,
+        )
+        .await
+        {
+            Ok(r) => sucesso.push(r),
+            Err(e) => falhas.push(FalhaUploadLoteDto {
+                nome_arquivo: nome_exibir,
+                erro: mensagem_erro_lote(e),
+            }),
+        }
+    }
+
+    if partes_arquivo == 0 {
+        return Err(ErroAplicacao::RequisicaoInvalida(
+            "Nenhum campo 'arquivo' no multipart".to_string(),
+        ));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(RespostaLoteUploadDto { sucesso, falhas }),
+    ))
+}
+
+/// Download com stream (adequado a arquivos grandes).
 pub async fn baixar_arquivo(
     Extension(projeto): Extension<ProjetoAutenticado>,
     Extension(estado): Extension<Arc<EstadoAplicacao>>,
@@ -195,10 +280,10 @@ pub async fn enviar_imagem(
     Extension(projeto): Extension<ProjetoAutenticado>,
     Extension(estado): Extension<Arc<EstadoAplicacao>>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<crate::dtos::arquivo_dto::RespostaUploadDto>), ErroAplicacao> {
+) -> Result<(StatusCode, Json<RespostaUploadDto>), ErroAplicacao> {
     let limite = estado.servico_arquivo.tamanho_maximo_bytes();
 
-    let (nome_arquivo, mime_campo, mut campo) = loop {
+    let mut campo_arquivo = loop {
         let campo = match multipart.next_field().await.map_err(|erro| {
             ErroAplicacao::RequisicaoInvalida(format!("Falha ao processar multipart: {erro}"))
         })? {
@@ -212,15 +297,14 @@ pub async fn enviar_imagem(
         if campo.name() != Some("arquivo") {
             continue;
         }
-        let nome_arquivo = campo.file_name().map(ToString::to_string);
-        let mime_campo = campo.content_type().map(ToString::to_string);
-        break (nome_arquivo, mime_campo, campo);
+        break campo;
     };
 
-    let nome_arquivo = nome_arquivo.ok_or_else(|| {
+    let nome_arquivo = campo_arquivo.file_name().map(ToString::to_string).ok_or_else(|| {
         ErroAplicacao::RequisicaoInvalida("Nome do arquivo e obrigatorio".to_string())
     })?;
 
+    let mime_campo = campo_arquivo.content_type().map(ToString::to_string);
     let tipo_mime = inferir_tipo_mime(&nome_arquivo, mime_campo.as_deref());
 
     if !crate::services::arquivo_service::validar_imagem_publica(
@@ -237,9 +321,9 @@ pub async fn enviar_imagem(
     let caminho = estado
         .servico_arquivo
         .caminho_fisico_arquivo(projeto.id, &id);
-    let caminho_path = CaminhoFicheiro::new(&caminho);
+    let caminho_path = CaminhoArquivo::new(&caminho);
 
-    let tamanho = gravar_campo_em_ficheiro(&mut campo, caminho_path, limite).await?;
+    let tamanho = gravar_campo_em_arquivo(&mut campo_arquivo, caminho_path, limite).await?;
 
     if tamanho == 0 {
         let _ = tokio::fs::remove_file(caminho_path).await;

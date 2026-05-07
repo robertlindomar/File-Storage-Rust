@@ -40,9 +40,9 @@ Não existe API key global: cada projeto recebe a sua `api_key` na criação.
 | Área                                                       | Autenticação / observação                                              |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
 | **Rotas de dados** (`/api/v1/arquivos`, `/api/v1/imagens`) | `Authorization: Bearer <api_key do projeto>`                           |
-| **Rotas admin** (`/api/v1/admin/*`)                        | `Authorization: Bearer <API_KEY_ADMIN>`                                |
+| **Rotas admin** (`/api/v1/admin/*`)                        | `Authorization: Bearer <JWT>` (login em `POST /api/v1/auth/admin/login`) **ou** `Bearer <API_KEY_ADMIN>` para scripts |
 | **Prefixo das rotas de API**                               | `/api/v1`                                                              |
-| **Saúde** (fora do prefixo)                                | `GET /health` e `GET /ready` — sem autenticação                        |
+| **Saúde** (fora do prefixo)                                | `GET /estado` (processo + BD), `GET /health`, `GET /ready` — sem autenticação |
 
 ---
 
@@ -53,7 +53,7 @@ Não existe API key global: cada projeto recebe a sua `api_key` na criação.
 | **API HTTP**       | **Axum** — rotas versionadas, multipart, limites de corpo.                                    |
 | **PostgreSQL**     | Metadados (projetos, arquivos, tipos MIME, tamanhos).                                         |
 | **Disco**          | Armazenamento físico dos blobs por projeto.                                                 |
-| **Autenticação**   | **API key por projeto** nas rotas de dados; **chave admin** (`API_KEY_ADMIN`) só para gestão de projetos. |
+| **Autenticação**   | **API key por projeto** nas rotas de dados; **admin**: JWT (conta única em `admin_conta`) ou **API_KEY_ADMIN** legada para `curl`/CI. |
 
 ---
 
@@ -112,12 +112,14 @@ CREATE DATABASE file_storage;
 
 ```bash
 cp .env.example .env
-# Ajuste DATABASE_URL, API_KEY_ADMIN, etc.
+# Ajuste DATABASE_URL, ADMIN_BOOTSTRAP_EMAIL, ADMIN_BOOTSTRAP_PASSWORD, JWT_SECRET (producao), etc.
 
 sqlx database create   # se precisar
 sqlx migrate run
 cargo run
 ```
+
+Na **primeira execução**, se a tabela `admin_conta` estiver vazia e `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` estiverem definidos, a conta de administrador é criada automaticamente. Depois use `POST /api/v1/auth/admin/login` com JSON `{"email":"...","password":"..."}` para obter o JWT.
 
 | Item               | Valor padrão / nota                                      |
 | ------------------ | -------------------------------------------------------- |
@@ -133,20 +135,26 @@ cargo run
 | `DATABASE_URL`                 | Conexão PostgreSQL                                                          |
 | `DIRETORIO_ARMAZENAMENTO`      | Pasta raiz no disco (ex.: `./armazenamento`)                                 |
 | `PORTA`                        | Porta HTTP (padrão `3000`)                                                  |
-| `API_KEY_ADMIN`                | Chave **somente** para `/api/v1/admin/*` — criar/listar/apagar projetos     |
+| `JWT_SECRET`                   | Segredo HMAC para JWT admin (em dev há default inseguro se omitido)         |
+| `JWT_EXPIRACAO_SEGS`           | Validade do token (default 28800)                                            |
+| `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` | Criam a conta admin se `admin_conta` estiver vazia no arranque |
+| `API_KEY_ADMIN`                | Ainda aceite como Bearer nas rotas admin (compat. scripts)                  |
 | `TAMANHO_MAXIMO_ARQUIVO_BYTES` | Limite por upload (padrão **100 MiB**)                                      |
+| `TAMANHO_MAXIMO_CORPO_LOTE_BYTES` | Tamanho máximo do corpo HTTP para **POST** `/api/v1/arquivos/lote` (vários arquivos; default: max(50 MiB, 50× o limite por arquivo)) |
+| `MAX_ARQUIVOS_POR_LOTE`        | Máximo de partes `arquivo` por pedido de lote (1–500, default **50**)       |
+| `COTA_ARMAZENAMENTO_BYTES`     | Opcional; cota para **GET** `/api/v1/admin/metricas/armazenamento` (barra % no painel) |
 | `BASE_URL`                     | Opcional; usado no campo `url` das respostas de upload                      |
 
 ---
 
 ## Como criar um projeto e obter a API key
 
-1. Defina `API_KEY_ADMIN` no `.env` (e o mesmo valor no Postman em `tokenAdmin`, se usar a coleção).
-2. Faça **POST** autenticado com essa chave:
+1. Obtenha um JWT: **POST** `/api/v1/auth/admin/login` com `{"email":"...","password":"..."}`, ou use `API_KEY_ADMIN` como Bearer (legado).
+2. Faça **POST** autenticado com o JWT (ou chave admin):
 
 ```http
 POST /api/v1/admin/projetos
-Authorization: Bearer <API_KEY_ADMIN>
+Authorization: Bearer <JWT_ou_API_KEY_ADMIN>
 Content-Type: application/json
 
 {"nome":"Nome do projeto"}
@@ -244,11 +252,12 @@ Importe a coleção em [`postman/FileStorege.postman_collection.json`](postman/F
 | Variável                  | Uso                                                                              |
 | ------------------------- | -------------------------------------------------------------------------------- |
 | `baseUrl`                 | Ex.: `http://localhost:3000`                                                     |
-| `tokenAdmin`              | Igual a `API_KEY_ADMIN` no servidor                                              |
+| `adminEmail` / `adminPassword` | Credenciais da conta admin (ex.: `ADMIN_BOOTSTRAP_*` no `.env`)             |
+| `tokenAdmin`              | Preenchido pelo **POST login admin** com o JWT; ou defina manualmente `API_KEY_ADMIN` |
 | `token`                   | API key **do projeto** (o POST “criar projeto” pode preencher automaticamente)   |
 | `projetoId` / `arquivoId` | IDs para rotas com path                                                          |
 
-Ordem sugerida: **Saúde** → **Admin** → **POST criar projeto** (preenche `token`) → **Arquivos** / **Imagens**.
+Ordem sugerida: **Saúde** (`GET /estado` opcional) → **Auth → POST login admin** (ou defina `tokenAdmin`) → **Admin** → **POST criar projeto** (preenche `token`) → **Arquivos** / **Imagens**.
 
 No separador **Authorization** do Postman pode aparecer “No Auth”: o Bearer costuma estar no separador **Headers** (`Authorization: Bearer {{tokenAdmin}}` ou `{{token}}`).
 
@@ -258,6 +267,7 @@ No separador **Authorization** do Postman pode aparecer “No Auth”: o Bearer 
 
 | Método | Rota      | Descrição                               |
 | ------ | --------- | --------------------------------------- |
+| GET    | `/estado` | JSON com `processo` e `base_dados` (503 se a BD falhar) |
 | GET    | `/health` | Liveness                                |
 | GET    | `/ready`  | Readiness (verifica PostgreSQL)         |
 
@@ -267,4 +277,4 @@ No separador **Authorization** do Postman pode aparecer “No Auth”: o Bearer 
 
 Este projeto está sob a [**MIT License**](LICENSE). Você pode usar, modificar e distribuir o código, mantendo o aviso de copyright e a licença nos derivados.
 
-Antes de colocar em **produção**, revise políticas de segurança, segredos (`API_KEY_ADMIN`, chaves de projeto), rede e HTTPS.
+Antes de colocar em **produção**, defina `JWT_SECRET` forte, revise segredos (`API_KEY_ADMIN`, chaves de projeto), rede e HTTPS.

@@ -13,6 +13,19 @@ pub struct ConfiguracaoAplicacao {
     pub base_url: Option<String>,
     /// Limite maximo de bytes por upload (corpo multipart).
     pub tamanho_maximo_arquivo_bytes: u64,
+    /// Limite maximo do corpo HTTP para `POST /arquivos/lote` (varios arquivos no mesmo pedido).
+    pub tamanho_maximo_corpo_lote_bytes: u64,
+    /// Quantidade maxima de partes `arquivo` aceites num unico lote.
+    pub max_arquivos_por_lote: usize,
+    /// Cota opcional para metricas do painel (percentagem usada = bytes_usados / cota).
+    pub cota_armazenamento_bytes: Option<u64>,
+    /// Segredo HMAC para assinar JWT de admin (`JWT_SECRET`).
+    pub jwt_secret: String,
+    /// Validade do access token em segundos (`JWT_EXPIRACAO_SEGS`, ex.: 28800).
+    pub jwt_expiracao_secs: u64,
+    /// Se a tabela `admin_conta` estiver vazia apos migrates, criar conta com estes valores.
+    pub admin_bootstrap_email: Option<String>,
+    pub admin_bootstrap_password: Option<String>,
 }
 
 impl ConfiguracaoAplicacao {
@@ -40,6 +53,48 @@ impl ConfiguracaoAplicacao {
             .and_then(|valor| valor.parse::<u64>().ok())
             .unwrap_or(100 * 1024 * 1024);
 
+        let max_arquivos_por_lote = env::var("MAX_ARQUIVOS_POR_LOTE")
+            .ok()
+            .and_then(|valor| valor.parse::<usize>().ok())
+            .unwrap_or(50)
+            .clamp(1, 500);
+
+        let tamanho_maximo_corpo_lote_bytes = env::var("TAMANHO_MAXIMO_CORPO_LOTE_BYTES")
+            .ok()
+            .and_then(|valor| valor.parse::<u64>().ok())
+            .unwrap_or_else(|| {
+                tamanho_maximo_arquivo_bytes
+                    .saturating_mul(50)
+                    .max(50 * 1024 * 1024)
+            })
+            .max(tamanho_maximo_arquivo_bytes);
+
+        let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| {
+            tracing::warn!(
+                "JWT_SECRET nao definida; usando valor inseguro apenas para desenvolvimento"
+            );
+            "jwt-desenvolvimento-inseguro-minimo-32-caracteres-!!!!".to_string()
+        });
+
+        let jwt_expiracao_secs = env::var("JWT_EXPIRACAO_SEGS")
+            .ok()
+            .and_then(|valor| valor.parse::<u64>().ok())
+            .unwrap_or(28_800);
+
+        let admin_bootstrap_email = env::var("ADMIN_BOOTSTRAP_EMAIL")
+            .ok()
+            .map(|valor| valor.trim().to_string())
+            .filter(|valor| !valor.is_empty());
+
+        let admin_bootstrap_password = env::var("ADMIN_BOOTSTRAP_PASSWORD")
+            .ok()
+            .filter(|valor| !valor.is_empty());
+
+        let cota_armazenamento_bytes = env::var("COTA_ARMAZENAMENTO_BYTES")
+            .ok()
+            .and_then(|valor| valor.parse::<u64>().ok())
+            .filter(|&v| v > 0);
+
         Self {
             porta,
             diretorio_armazenamento,
@@ -47,6 +102,13 @@ impl ConfiguracaoAplicacao {
             database_url,
             base_url,
             tamanho_maximo_arquivo_bytes,
+            tamanho_maximo_corpo_lote_bytes,
+            max_arquivos_por_lote,
+            cota_armazenamento_bytes,
+            jwt_secret,
+            jwt_expiracao_secs,
+            admin_bootstrap_email,
+            admin_bootstrap_password,
         }
     }
 }

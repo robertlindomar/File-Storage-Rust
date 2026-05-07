@@ -50,7 +50,17 @@ pub struct ContextoTeste {
     _diretorio: DiretoriaTemporaria,
 }
 
+#[derive(Clone, Default)]
+pub struct OpcoesContextoTeste {
+    pub max_arquivos_por_lote: Option<usize>,
+    pub cota_armazenamento_bytes: Option<u64>,
+}
+
 pub async fn construir_contexto_teste() -> Option<ContextoTeste> {
+    construir_contexto_teste_com(OpcoesContextoTeste::default()).await
+}
+
+pub async fn construir_contexto_teste_com(opcoes: OpcoesContextoTeste) -> Option<ContextoTeste> {
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         "postgresql://postgres:postgres@localhost:5432/file_storage".to_string()
     });
@@ -73,6 +83,8 @@ pub async fn construir_contexto_teste() -> Option<ContextoTeste> {
         .expect("Falha ao executar migracoes SQL para os testes");
 
     let diretorio = DiretoriaTemporaria::nova("file-storage-service-testes");
+    let max_arquivos_por_lote = opcoes.max_arquivos_por_lote.unwrap_or(50);
+    let cota_armazenamento_bytes = opcoes.cota_armazenamento_bytes;
     let configuracao = Arc::new(ConfiguracaoAplicacao {
         porta: 3001,
         diretorio_armazenamento: diretorio.caminho().to_string_lossy().to_string(),
@@ -80,6 +92,13 @@ pub async fn construir_contexto_teste() -> Option<ContextoTeste> {
         database_url,
         base_url: Some("http://localhost:3001".to_string()),
         tamanho_maximo_arquivo_bytes: 1024 * 1024,
+        tamanho_maximo_corpo_lote_bytes: 8 * 1024 * 1024,
+        max_arquivos_por_lote,
+        cota_armazenamento_bytes,
+        jwt_secret: "test-jwt-secret-at-least-32-characters-long!!".to_string(),
+        jwt_expiracao_secs: 3600,
+        admin_bootstrap_email: None,
+        admin_bootstrap_password: None,
     });
 
     let estado = construir_estado_aplicacao(configuracao, pool.clone());

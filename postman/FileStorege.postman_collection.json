@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "344465a1-69db-4e39-a954-059fe8aaed4b",
     "name": "File Storage Service",
-    "description": "Coleção para o microserviço file_storage_service (multi-tenant). Configure: `baseUrl`, `tokenAdmin` (= API_KEY_ADMIN), `token` (= api_key do projeto após criar projeto; o script do POST preenche automaticamente). Opcional: `projetoId`, `arquivoId`.",
+    "description": "Coleção para o microserviço file_storage_service (multi-tenant).\n\n**Variáveis:** `baseUrl`, `token` (api_key do projeto; o POST criar projeto preenche), `projetoId`, `arquivoId`.\n\n**Admin:**\n1. **JWT (recomendado):** defina `adminEmail` e `adminPassword` (iguais a `ADMIN_BOOTSTRAP_*` no `.env` na primeira vez). Execute **Auth → POST login admin** — o script grava o JWT em `tokenAdmin`.\n2. **Ou** defina `tokenAdmin` manualmente com `API_KEY_ADMIN` (compat. scripts / legado).\n\n**Saúde:** `GET /estado` devolve processo + base_dados num JSON; `/health` e `/ready` continuam disponíveis.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "44405983",
     "_collection_link": "https://go.postman.co/collection/44405983-344465a1-69db-4e39-a954-059fe8aaed4b?source=collection_link"
@@ -11,6 +11,16 @@
     {
       "name": "Saude",
       "item": [
+        {
+          "name": "GET estado (processo + base de dados)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/estado",
+            "description": "JSON: `processo` (ok) e `base_dados` (ready | not_ready). HTTP 503 se a PostgreSQL falhar."
+          },
+          "response": []
+        },
         {
           "name": "GET health (liveness)",
           "request": {
@@ -26,6 +36,49 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/ready"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth (admin)",
+      "item": [
+        {
+          "name": "POST login admin (grava JWT em tokenAdmin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    try {",
+                  "        var j = pm.response.json();",
+                  "        if (j && j.access_token) {",
+                  "            pm.collectionVariables.set('tokenAdmin', j.access_token);",
+                  "        }",
+                  "    } catch (e) {}",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/auth/admin/login",
+            "description": "Usa as variáveis `adminEmail` e `adminPassword`. Resposta: `access_token`, `token_type`, `expires_in`. O teste automático copia `access_token` para `tokenAdmin` para as rotas seguintes."
           },
           "response": []
         }
@@ -71,7 +124,8 @@
               "mode": "raw",
               "raw": "{\n  \"nome\": \"Projeto de teste\"\n}"
             },
-            "url": "{{baseUrl}}/api/v1/admin/projetos"
+            "url": "{{baseUrl}}/api/v1/admin/projetos",
+            "description": "Requer JWT em `tokenAdmin` (login) ou `API_KEY_ADMIN` na mesma variável."
           },
           "response": []
         },
@@ -87,6 +141,38 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/admin/projetos"
+          },
+          "response": []
+        },
+        {
+          "name": "GET uploads recentes (atividade global)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/atividade/uploads-recentes?limite=20",
+            "description": "Array JSON: nome_arquivo, projeto_id, projeto_nome, tamanho, criado_em. Query opcional `limite` (1–100, default 20). Requer migração 0005 (RLS admin)."
+          },
+          "response": []
+        },
+        {
+          "name": "GET metricas armazenamento (uso + cota)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/metricas/armazenamento",
+            "description": "Resposta: `bytes_usados` (soma na BD), `bytes_cota` (opcional, env COTA_ARMAZENAMENTO_BYTES), `percentagem` (0–100 se houver cota)."
           },
           "response": []
         },
@@ -149,6 +235,39 @@
               ]
             },
             "url": "{{baseUrl}}/api/v1/arquivos"
+          },
+          "response": []
+        },
+        {
+          "name": "POST importacao em lote",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "arquivo",
+                  "description": "Varias partes com o mesmo nome de campo (adicione mais linhas 'arquivo' no Postman).",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "arquivo",
+                  "description": "Segundo arquivo (opcional).",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/arquivos/lote",
+            "description": "Resposta 200: JSON com `sucesso` (array de {id, url}) e `falhas` (array de {nome_arquivo, erro}). Limite de partes: env `MAX_ARQUIVOS_POR_LOTE` (default 50). Tamanho maximo do corpo: `TAMANHO_MAXIMO_CORPO_LOTE_BYTES`. Cada arquivo continua limitado por `TAMANHO_MAXIMO_ARQUIVO_BYTES`."
           },
           "response": []
         },
@@ -286,6 +405,14 @@
     {
       "key": "baseUrl",
       "value": "http://localhost:3000"
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@exemplo.local"
+    },
+    {
+      "key": "adminPassword",
+      "value": ""
     },
     {
       "key": "tokenAdmin",

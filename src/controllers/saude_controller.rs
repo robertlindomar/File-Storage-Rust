@@ -15,6 +15,15 @@ struct CorpoSaude {
     status: &'static str,
 }
 
+/// Resposta agregada: processo (liveness) + base de dados (readiness).
+#[derive(Serialize)]
+pub struct CorpoEstado {
+    /// Processo HTTP a correr — equivalente a <code>/health</code>.
+    pub processo: &'static str,
+    /// Ligação à base — equivalente a <code>/ready</code> (<code>ready</code> ou <code>not_ready</code>).
+    pub base_dados: &'static str,
+}
+
 const PAGINA_INICIO: &str = r#"<!DOCTYPE html>
 <html lang="pt">
 <head>
@@ -32,8 +41,9 @@ const PAGINA_INICIO: &str = r#"<!DOCTYPE html>
   <h1>file_storage_service</h1>
   <p>API REST — não há interface web completa; a raiz só mostra esta página de ajuda.</p>
   <ul>
-    <li><a href="/health"><code>/health</code></a> — processo OK</li>
-    <li><a href="/ready"><code>/ready</code></a> — base de dados OK</li>
+    <li><a href="/estado"><code>/estado</code></a> — processo + base de dados (uma resposta)</li>
+    <li><a href="/health"><code>/health</code></a> — só processo OK</li>
+    <li><a href="/ready"><code>/ready</code></a> — só base de dados OK</li>
     <li><code>/api/v1/…</code> — upload e gestão (com <code>Authorization</code>)</li>
   </ul>
 </body>
@@ -49,6 +59,20 @@ pub async fn saude() -> impl IntoResponse {
         StatusCode::OK,
         Json(CorpoSaude { status: "ok" }),
     )
+}
+
+/// Liveness + readiness num único JSON. HTTP 503 se a base de dados não responder.
+pub async fn estado(Extension(estado): Extension<Arc<EstadoAplicacao>>) -> impl IntoResponse {
+    let base_ok = sqlx::query("SELECT 1").fetch_one(&estado.pool).await.is_ok();
+    let corpo = CorpoEstado {
+        processo: "ok",
+        base_dados: if base_ok { "ready" } else { "not_ready" },
+    };
+    if base_ok {
+        (StatusCode::OK, Json(corpo)).into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(corpo)).into_response()
+    }
 }
 
 pub async fn pronto(Extension(estado): Extension<Arc<EstadoAplicacao>>) -> impl IntoResponse {

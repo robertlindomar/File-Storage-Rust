@@ -87,10 +87,18 @@ impl RepositorioProjeto {
 
     pub async fn listar_todos(
         &self,
-    ) -> Result<Vec<(Uuid, String, chrono::DateTime<chrono::Utc>)>, ErroAplicacao> {
+    ) -> Result<
+        Vec<(
+            Uuid,
+            String,
+            String,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+        ErroAplicacao,
+    > {
         let linhas = sqlx::query(
             r#"
-            SELECT id, nome, criado_em
+            SELECT id, nome, api_key, criado_em
             FROM projetos
             ORDER BY criado_em DESC
             "#,
@@ -108,6 +116,7 @@ impl RepositorioProjeto {
                     linha.get(0),
                     linha.get(1),
                     linha.get(2),
+                    linha.get(3),
                 )
             })
             .collect())

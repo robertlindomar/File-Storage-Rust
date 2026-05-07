@@ -1,10 +1,21 @@
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio::fs;
 use uuid::Uuid;
 
 use crate::{erros::ErroAplicacao, models::arquivo_modelo::ArquivoModelo};
+
+/// Linha para painel admin (JOIN arquivos + projetos; requer RLS `app.admin_global_read`).
+#[derive(Debug, sqlx::FromRow)]
+pub struct UploadRecenteAdminRow {
+    pub nome_arquivo: String,
+    pub projeto_id: Uuid,
+    pub projeto_nome: String,
+    pub tamanho: i64,
+    pub criado_em: DateTime<Utc>,
+}
 
 /// Camada de acesso ao disco local e metadados em PostgreSQL (isolado por projeto).
 pub struct RepositorioArquivo {
@@ -22,6 +33,96 @@ impl RepositorioArquivo {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Lista uploads recentes em todos os projetos (JWT admin). Usa transacao com
+    /// `app.admin_global_read` para satisfazer a politica RLS extra (migracao 0005).
+    pub async fn listar_uploads_recentes_globais(
+        &self,
+        limite: i64,
+    ) -> Result<Vec<UploadRecenteAdminRow>, ErroAplicacao> {
+        let mut transacao = self.pool.begin().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao iniciar transacao para listagem global de uploads: {erro}"
+            ))
+        })?;
+
+        sqlx::query("SELECT set_config('app.admin_global_read', 'true', true)")
+            .execute(transacao.as_mut())
+            .await
+            .map_err(|erro| {
+                ErroAplicacao::Interno(format!(
+                    "Falha ao ativar leitura admin global na sessao: {erro}"
+                ))
+            })?;
+
+        let linhas = sqlx::query_as::<_, UploadRecenteAdminRow>(
+            r#"
+            SELECT
+                a.nome_arquivo,
+                a.projeto_id,
+                p.nome AS projeto_nome,
+                a.tamanho,
+                a.criado_em
+            FROM arquivos a
+            INNER JOIN projetos p ON p.id = a.projeto_id
+            ORDER BY a.criado_em DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limite)
+        .fetch_all(transacao.as_mut())
+        .await
+        .map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao listar uploads recentes na base: {erro}"
+            ))
+        })?;
+
+        transacao.commit().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao confirmar listagem global de uploads: {erro}"
+            ))
+        })?;
+
+        Ok(linhas)
+    }
+
+    /// Soma `tamanho` de todos os arquivos (JWT admin). Mesma sessao RLS que uploads recentes.
+    pub async fn somar_bytes_totais_admin(&self) -> Result<i64, ErroAplicacao> {
+        let mut transacao = self.pool.begin().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao iniciar transacao para soma global de bytes: {erro}"
+            ))
+        })?;
+
+        sqlx::query("SELECT set_config('app.admin_global_read', 'true', true)")
+            .execute(transacao.as_mut())
+            .await
+            .map_err(|erro| {
+                ErroAplicacao::Interno(format!(
+                    "Falha ao ativar leitura admin global na sessao: {erro}"
+                ))
+            })?;
+
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(tamanho), 0)::bigint FROM arquivos",
+        )
+        .fetch_one(transacao.as_mut())
+        .await
+        .map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao somar tamanhos na base: {erro}"
+            ))
+        })?;
+
+        transacao.commit().await.map_err(|erro| {
+            ErroAplicacao::Interno(format!(
+                "Falha ao confirmar soma global de bytes: {erro}"
+            ))
+        })?;
+
+        Ok(total)
     }
 
     async fn iniciar_transacao_projeto(
@@ -123,6 +224,7 @@ impl RepositorioArquivo {
             caminho: caminho_str,
             tipo_mime,
             tamanho,
+            criado_em: Utc::now(),
         })
     }
 
@@ -139,7 +241,7 @@ impl RepositorioArquivo {
         let mut transacao = self.iniciar_transacao_projeto(projeto_id).await?;
         let linha = sqlx::query(
             r#"
-            SELECT id::text, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho
+            SELECT id::text, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho, criado_em
             FROM arquivos
             WHERE id = $1 AND projeto_id = $2
             "#,
@@ -165,6 +267,7 @@ impl RepositorioArquivo {
             caminho: linha.get(3),
             tipo_mime: linha.get(4),
             tamanho: linha.get(5),
+            criado_em: linha.get(6),
         }))
     }
 
@@ -175,7 +278,7 @@ impl RepositorioArquivo {
         let mut transacao = self.iniciar_transacao_projeto(projeto_id).await?;
         let linhas = sqlx::query(
             r#"
-            SELECT id::text, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho
+            SELECT id::text, projeto_id, nome_arquivo, caminho, tipo_mime, tamanho, criado_em
             FROM arquivos
             WHERE projeto_id = $1
             ORDER BY criado_em DESC
@@ -203,6 +306,7 @@ impl RepositorioArquivo {
                 caminho: linha.get(3),
                 tipo_mime: linha.get(4),
                 tamanho: linha.get(5),
+                criado_em: linha.get(6),
             })
             .collect())
     }
@@ -324,6 +428,7 @@ impl RepositorioArquivo {
             caminho,
             tipo_mime,
             tamanho,
+            criado_em: Utc::now(),
         })
     }
 }

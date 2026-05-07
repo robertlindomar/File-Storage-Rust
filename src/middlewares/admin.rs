@@ -6,9 +6,13 @@ use axum::{
     response::Response,
 };
 
-use crate::{EstadoAplicacao, erros::ErroAplicacao};
+use crate::{
+    EstadoAplicacao,
+    erros::ErroAplicacao,
+    services::auth_admin_service::autorizacao_admin_valida,
+};
 
-/// Compara o token com `API_KEY_ADMIN` da configuracao.
+/// JWT de admin valido ou `API_KEY_ADMIN` (compatibilidade com scripts).
 pub async fn camada_admin(
     requisicao: Request,
     seguinte: Next,
@@ -22,9 +26,7 @@ pub async fn camada_admin(
         })?;
 
     let chave = extrair_token(&requisicao)?;
-    if chave != estado.configuracao.api_key_admin {
-        return Err(ErroAplicacao::NaoAutorizado);
-    }
+    autorizacao_admin_valida(estado.configuracao.as_ref(), &chave)?;
     Ok(seguinte.run(requisicao).await)
 }
 

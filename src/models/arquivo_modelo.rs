@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -10,4 +11,5 @@ pub struct ArquivoModelo {
     pub caminho: String,
     pub tipo_mime: String,
     pub tamanho: i64,
+    pub criado_em: DateTime<Utc>,
 }
